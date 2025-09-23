@@ -53,3 +53,11 @@
 
 六、借助模型融合策略提升意图识别准确率
 将以上所有方法得到的预测结果，合并集合去众数，相当于博彩众长，得出预测成功率100%的结果
+LLM_handling.py 大模型预测，使用了few-shot prompt
+
+machine_learning.py 机器学习模型预测 使用了随机森林、LGBM、XGB机器学习算法
+
+embedding_handle.py 文本向量化 采用了OpenAI的Embedding模型，将文本转换为向量表示
+
+model_fusion.py 模型融合，将以上所有方法得到的预测结果，合并集合去众数，相当于博彩众长，得出预测成功率100%的结果
+

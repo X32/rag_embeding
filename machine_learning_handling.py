@@ -138,11 +138,18 @@ def main():
     # 模型预测
     pred_df = machine_learning_prediction_thread(X_test,clf_RF,clf_LGBM,clf_XGB)
 
-    print(pred_df.head())
+    print("pred_df  head = ",pred_df.head())
+    print("pred_df  shape = ",pred_df.shape)
+    print("test_df  shape = ",test_df.shape)
     #axis=1 表示横向合并（按列拼接），默认 axis=0 是纵向合并（按行拼接）
-    merged_df = pd.concat([combined_df,pred_df], axis=1)
+    # merged_df = pd.concat([test_df,pred_df], axis=1)
+
+    merged_df = pd.concat([
+        test_df.reset_index(drop=True),
+        pred_df.reset_index(drop=True)
+    ], axis=1)
     print(merged_df.head())
-    merged_df.to_csv('./data/combined_dataset_with_pred.csv',index=False)
+    merged_df.to_csv('./data/test_dataset_with_pred.csv',index=False)
     #
     # clf_RF = random_forest(X_train, Y_train)
     # test_preds = clf_RF.predict(X_test)

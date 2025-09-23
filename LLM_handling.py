@@ -7,6 +7,7 @@ from sklearn.ensemble import RandomForestClassifier
 from util.embeddings import get_text_embedding
 from util.llm_models import function_call_predict
 
+import time
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY")
 functions = []
 type_dict = {
@@ -49,11 +50,16 @@ def function_predict(text, model='qwen-turbo'):
         return -1
 
 def llm_predict_handle(x: pd.DataFrame):
+    return llm_predict_handle_withName(x,"function_call_prediction_turbo")
+def llm_predict_handle_withName(x: pd.DataFrame,key:str):
     for index, row in enumerate(x.itertuples()):
         try:
-            print(row.Conversation)
+            #print(row.Conversation)
             # 尝试执行 function_call_predict 函数
-            x.at[index, "function_call_prediction_turbo"] = function_predict(row.Conversation,model='qwen-turbo')
+            text = row.Conversation
+            res = function_predict(text,model='qwen-turbo')
+            print(f"type = {row.type}  ret = {res}")
+            x.at[index, key] = res
         except Exception as e:
             # 打印错误信息并等待一分钟
             print(f"Error on row {index}: {e}")
@@ -119,13 +125,167 @@ def init_function_calling():
         "handle_investment_advisory": handle_investment_advisory,
         "handle_international_transactions": handle_international_transactions
     }
+
+def process_dataset(dataset,
+                    messages=None,
+                    model_name='qwen-max',
+                    text_col_name='Conversation',
+                    prediction_col_name='function_call_prediction_qwenMax'):
+    """
+    对给定的数据集应用function_call_predict进行意图识别。
+
+    :param dataset: DataFrame, 包含需要处理的数据
+    :param model_name: dict, Few-shot-messages，默认为None，表示不带入任何系统消息和提示
+    :param model_name: str, 使用的模型名称
+    :param text_col_name: str, 输入function calling的文本列名称
+    :param prediction_col_name: str, 输出意图判别结果的列名称
+    :return: 修改后的DataFrame
+    """
+    if messages == None:
+        input_messages = []
+    else:
+        input_messages = messages.copy()
+    data_len = len(dataset)
+    for index in range(data_len):
+        success = False
+        while not success:
+            try:
+                # 尝试执行 function_call_predict 函数
+                text = dataset.at[index, text_col_name]
+                input_messages.append({"role": "user", "content": text})
+
+                funcName = function_call_predict(input_messages, functions, model=model_name)
+                # funcName = function_call_predict(messages, functions, model)
+                result = -1
+                if funcName != -1:
+                    result = type_dict[funcName]
+                dataset.at[index, prediction_col_name] = result
+                success = True  # 如果执行成功，跳出循环
+                input_messages = messages.copy()
+            except Exception as e:
+                # 打印错误信息并等待一分钟
+                print(f"Error on row {index}: {e}")
+                time.sleep(60)  # 等待一分钟后再次尝试
+
+        # 每10行打印一次进度
+        if index % 10 == 0:
+            print(f"Processed {index}/{len(dataset)} rows")
+
+    return dataset
+
 def test():
     init_function_calling()
-    text = '我的储蓄账户是否可以与支付软件直接绑定？'
+    text = '请问贵行的理财产品有哪些安全保障措施？'
     function_name = function_predict(text, model='qwen-turbo')
     print(function_name)
     return
-def main():
+def few_shot_prompting():
+    init_function_calling()
+    # function_name = function_predict(text, model='qwen-turbo')
+    # return function_name
+def get_few_shot_test():
+    import pandas as pd
+
+    # 读取训练集
+    train_df = pd.read_csv('./data/train_dataset_test.csv')
+
+    # 读取测试集
+    test_df = pd.read_csv('./data/test_dataset_test.csv')
+    init_function_calling()
+    print("H++++++++++++++++++++++H")
+    # #
+    # #
+    test_df = llm_predict_handle(test_df)
+    test_temp_1 = test_df[test_df["function_call_prediction_turbo"] != test_df["type"]][['Conversation', 'type', 'function_call_prediction_turbo']]
+    print(test_temp_1.head())
+    print(test_temp_1.shape)
+    test_temp_1.to_csv('./data/few_shot_dataset_test.csv', index=False)
+
+    train_df = llm_predict_handle(train_df)
+    test_temp_2 = train_df[train_df["function_call_prediction_turbo"] != train_df["type"]][['Conversation', 'type', 'function_call_prediction_turbo']]
+    print(test_temp_2.head())
+    print(test_temp_2.shape)
+    test_temp_2.to_csv('./data/few_shot_dataset_train.csv', index=False)
+
+    # # 读取训练集
+    # test_temp_1 = pd.read_csv('./data/few_shot_dataset_train.csv')
+    # # 读取测试集
+    # test_temp_2 = pd.read_csv('./data/few_shot_dataset_test.csv')
+    #
+    # print(test_temp_1.shape)
+    # print(test_temp_2.shape)
+
+    merged_df = pd.concat([test_temp_1, test_temp_2], axis=0)
+    merged_df.to_csv('./data/few_shot_dataset.csv', index=False)
+    print(merged_df)
+    print(merged_df.shape)
+
+def get_key_by_value(dict, value):
+    for key, val in dict.items():
+        if val == value:
+            return key
+    return None
+
+def get_few_shot_prompting():
+    test_temp = pd.read_csv('./data/few_shot_dataset.csv')
+    few_shot_messages = []
+    i = 0
+    for index, row in test_temp.iterrows():
+        text = row['Conversation']
+        intention_category = row['type']
+        function_name = get_key_by_value(type_dict, intention_category)
+        i = i + 1
+
+        assistant_message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "function": {  # 改为function对象
+                    "name": function_name,  # 保持原变量名
+                    "arguments": '{}'  # 改为parameters且为字典格式
+                },
+                "id": f"call_abc{i}"  # 保持原格式
+            }]
+        }
+
+        tool_message = {
+            "role": "tool",
+            "content": '...',
+            "tool_call_id": f"call_abc{i}"
+        }
+
+        few_shot_messages.append({"role": "user", "content": text})
+        few_shot_messages.append(assistant_message)
+        few_shot_messages.append(tool_message)
+
+    system_message = [{"role": "system", "content": "你是一个智能银行客户接待应用，输入的每个user message都是某位银行客户的需求。\
+        你的每一次回答都必须调用function call来完成。请仔细甄别用户需求，并合理调用外部函数来进行回答。"}]
+    messages = system_message + few_shot_messages
+    # messages
+    print(messages)
+    return messages
+
+def llm_few_shot_predict(test_df: pd.DataFrame):
+    few_shot_messages = get_few_shot_prompting()
+
+    test_df = process_dataset(dataset=test_df,  # test_df。head(5)
+                              messages=few_shot_messages,
+                              model_name='qwen-turbo',
+                              prediction_col_name='function_call_prediction_turbo_few_shot')
+    return test_df
+
+def test_few_shot_predict():
+    init_function_calling()
+    test_df = pd.read_csv('./data/test_dataset_test.csv')
+    test_df = llm_few_shot_predict(test_df)
+    print(test_df.head(10))
+    print(test_df.shape)
+    test_temp_3 = test_df[test_df["function_call_prediction_turbo_few_shot"] != test_df["type"]][
+        ['Conversation', 'type', 'function_call_prediction_turbo_few_shot']]
+    print(test_temp_3)
+    print(test_temp_3.shape)
+#划分数据集
+def split_dataset():
     # 数据准备，划分测试集和数据集
     combined_df = pd.read_csv('./data/combined_dataset.csv')
     combined_df["embedding"] = combined_df.Conversation.apply(lambda x: get_text_embedding(x))
@@ -137,19 +297,98 @@ def main():
         random_state=42,  # 固定随机种子，确保结果可复现
         stratify=combined_df['type']  # 按目标变量分层抽样（分类任务）
     )
+    train_df.to_csv('./data/train_dataset_test.csv', index=False)
+    test_df.to_csv('./data/test_dataset_test.csv', index=False)
+    return train_df, test_df
+def collection_few_shot_dataset():
+    train_df, test_df = split_dataset()
+
+    # init_function_calling()
+    print(train_df.shape)
+    print(test_df.shape)
+
+    print("H++++++++++++++++++++++H")
+    #
+    # 收集few_shot 数据集
+    # 测试集
+    test_df = llm_predict_handle(test_df)
+    test_temp_1 = test_df[test_df["function_call_prediction_turbo"] != test_df["type"]][
+        ['Conversation', 'type', 'function_call_prediction_turbo']]
+    print(test_temp_1.head())
+    print(test_temp_1.shape)
+    test_temp_1.to_csv('./data/few_shot_dataset_test.csv', index=False)
+
+    # 训练集
+    train_df = llm_predict_handle(train_df)
+    test_temp_2 = train_df[train_df["function_call_prediction_turbo"] != train_df["type"]][
+        ['Conversation', 'type', 'function_call_prediction_turbo']]
+    print(test_temp_2.head())
+    print(test_temp_2.shape)
+    test_temp_2.to_csv('./data/few_shot_dataset_train.csv', index=False)
+
+#数据预测
+def data_few_shot_predict(test_df: pd.DataFrame):
     init_function_calling()
 
-    print(train_df.head())
-    print(train_df.shape)
-    train_df = llm_predict_handle(train_df)
-    print("H++++++++++++++++++++++H")
-    print(train_df.head())
-    print(train_df.shape)
+    test_df = llm_few_shot_predict(test_df)
+    print(test_df.head(10))
+    print(test_df.shape)
+    return test_df
 
-    print("final")
+def dataSet_llm_predict_handle():
+    init_function_calling()
+    test_df = pd.read_csv('./data/test_dataset_test.csv')
+    ret_test_df = llm_predict_handle_withName(test_df,"function_call_prediction_turbo")
+    ret_test_df.to_csv('./data/llm_predict_dataset_test.csv', index=False)
+
+
+def main():
+    few_shot_df = None
+
+    #如果few_shot_dataset.csv不存在，才收集数据
+    if not os.path.exists('./data/few_shot_dataset.csv'):
+        #收集few_shot数据
+        collection_few_shot_dataset()
+    else:
+        few_shot_df = pd.read_csv('./data/few_shot_dataset.csv')
+
+    #如果few_shot_df不存在，才读取数据
+    if few_shot_df is None:
+        few_shot_df = pd.read_csv('./data/few_shot_dataset.csv')
+
+
+    print(few_shot_df.shape)
+
+    # 测试few_shot 预测
+    # test_few_shot_predict()
+    test_df =  pd.read_csv('./data/test_dataset_test.csv')
+    ret_test_df = data_few_shot_predict(test_df)
+
+    print(ret_test_df.head(10))
+    print(ret_test_df.shape)
+
+    #预测的结果
+    ret_test_df1 = ret_test_df[ret_test_df["function_call_prediction_turbo_few_shot"] != ret_test_df["type"]][
+        ['Conversation', 'type', 'function_call_prediction_turbo_few_shot']]
+    print(ret_test_df1)
+    print(ret_test_df1.shape)
+    #保存few_shot 预测结果
+    ret_test_df.to_csv('./data/test_dataset_with_llm_pred.csv', index=False)
+
+    # #
+    # ret_test_df = llm_predict_handle(ret_test_df)
+    # ret_test_df.to_csv('./data/few_shot_dataset_test.csv', index=False)
+
+
+
+
 
 
 
 if __name__ == '__main__':
+    # test_few_shot_predict()
     main()
+    # dataSet_llm_predict_handle()
     # test()
+    # get_few_shot_test()
+    # get_few_shot_prompting()
